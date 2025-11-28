@@ -68,7 +68,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ data, flightId }) 
     try {
         // In a real app, you should proxy this through your backend to hide the key.
         // For this demo, we'll do it client-side as requested, but THIS IS NOT SECURE FOR PRODUCTION.
-        const OPENAI_KEY = "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";
+        const OPENAI_KEY = import.meta.env.VITE_OPENAI_API_KEY;
         
         const systemPrompt = `You are an expert aviation anomaly detection assistant. 
         You are provided with JSON analysis data for a flight (ID: ${flightId}).

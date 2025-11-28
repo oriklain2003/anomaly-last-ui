@@ -23,7 +23,8 @@ export const AnalyzePage: React.FC = () => {
     setUploadStatus(null);
 
     try {
-      const response = await fetch(`/api/analyze/${flightId}`);
+      const API_BASE = import.meta.env.VITE_API_URL || '';
+      const response = await fetch(`${API_BASE}/api/analyze/${flightId}`);
       if (!response.ok) {
         const err = await response.json();
         throw new Error(err.detail || "Analysis failed");
@@ -44,7 +45,8 @@ export const AnalyzePage: React.FC = () => {
       setUploadStatus(null);
       
       try {
-          const feedbackResponse = await fetch('/api/feedback', {
+          const API_BASE = import.meta.env.VITE_API_URL || '';
+          const feedbackResponse = await fetch(`${API_BASE}/api/feedback`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
