@@ -150,6 +150,17 @@ export const ResultsView: React.FC<ResultsViewProps> = ({ data, flightId, isLoad
                   barLabel="Probability"
                   delay="700ms"
                 />
+
+                {/* Hybrid */}
+                <ModelCard 
+                  title="Hybrid CNN-Trans"
+                  status={data?.layer_6_hybrid?.status}
+                  score={data?.layer_6_hybrid?.score}
+                  isAnomaly={data?.layer_6_hybrid?.is_anomaly}
+                  label="Anomaly Score"
+                  barLabel="Probability"
+                  delay="800ms"
+                />
             </div>
         </div>
       )}
