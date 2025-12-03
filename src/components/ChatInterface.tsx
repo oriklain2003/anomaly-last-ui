@@ -66,44 +66,30 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ data, flightId }) 
     setLoading(true);
 
     try {
-        // In a real app, you should proxy this through your backend to hide the key.
-        // For this demo, we'll do it client-side as requested, but THIS IS NOT SECURE FOR PRODUCTION.
-        const OPENAI_KEY = import.meta.env.VITE_OPENAI_API_KEY;
+        const API_BASE = import.meta.env.VITE_API_URL || '';
         
-        const systemPrompt = `You are an expert aviation anomaly detection assistant. 
-        You are provided with JSON analysis data for a flight (ID: ${flightId}).
-        
-        Data Context:
-        ${JSON.stringify(data, null, 2)}
-        
-        Explain technical details simply. If there are anomalies, explain why they might be dangerous.
-        Focus on the triggered rules and model scores.
-        If the user asks about something not in the data, say you don't know based on the current analysis.`;
-  
-        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        const response = await fetch(`${API_BASE}/api/v2/chat`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${OPENAI_KEY}`
           },
           body: JSON.stringify({
-            model: "gpt-5", 
-            messages: [
-              { role: 'system', content: systemPrompt },
-              ...messages.map(m => ({ role: m.role, content: m.content })),
-              { role: 'user', content: userMsg.content }
-            ]
+            messages: messages.map(m => ({ role: m.role, content: m.content })),
+            flight_id: flightId,
+            analysis: data,
+            points: [],
+            user_question: userMsg.content
           })
         });
   
         if (!response.ok) {
-          throw new Error(`OpenAI API Error: ${response.statusText}`);
+          throw new Error(`API Error: ${response.statusText}`);
         }
   
         const json = await response.json();
-        const aiMsg = json.choices[0].message;
+        const aiContent = json.response;
         
-        setMessages(prev => [...prev, { role: 'assistant', content: aiMsg.content }]);
+        setMessages(prev => [...prev, { role: 'assistant', content: aiContent }]);
   
       } catch (error: any) {
         setMessages(prev => [...prev, { role: 'assistant', content: `Sorry, I encountered an error: ${error.message}` }]);
