@@ -83,7 +83,10 @@ export const ResultsView: React.FC<ResultsViewProps> = ({ data, flightId, isLoad
         className="relative w-full aspect-[16/8] rounded-xl overflow-hidden bg-gray-200 dark:bg-gray-800 border border-gray-200/50 dark:border-white/10 animate-in slide-in-from-bottom-4 fade-in duration-700 fill-mode-backwards"
         style={{ animationDelay: '200ms' }}
       >
-        <MapComponent path={data?.summary.flight_path || []} />
+        <MapComponent 
+          path={data?.summary.flight_path || []} 
+          points={data?.track?.points}
+        />
         <div className="absolute top-4 left-4 bg-black/70 backdrop-blur-sm text-white px-3 py-1.5 rounded-lg text-sm z-10 pointer-events-none">
           <p className="font-bold">Flight Path Visualization</p>
           {data && (

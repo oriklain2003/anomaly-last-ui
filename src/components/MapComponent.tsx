@@ -1,10 +1,11 @@
 import React, { useEffect, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { Airport } from '../types';
+import type { Airport, TrackPoint } from '../types';
 
 interface MapComponentProps {
-  path: [number, number][];
+  path?: [number, number][];
+  points?: TrackPoint[];
 }
 
 // Hardcoded list of airports from rule_config.json
@@ -31,7 +32,7 @@ const AIRPORTS: Airport[] = [
     { code: "OSDI", name: "Damascus Intl", lat: 33.411, lon: 36.516 }
 ];
 
-export const MapComponent: React.FC<MapComponentProps> = ({ path }) => {
+export const MapComponent: React.FC<MapComponentProps> = ({ path = [], points = [] }) => {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const apiKey = 'r7kaQpfNDVZdaVp23F1r';
@@ -111,12 +112,8 @@ export const MapComponent: React.FC<MapComponentProps> = ({ path }) => {
       map.current.addSource('route', {
         type: 'geojson',
         data: {
-          type: 'Feature',
-          properties: {},
-          geometry: {
-            type: 'LineString',
-            coordinates: [],
-          },
+          type: 'FeatureCollection',
+          features: []
         },
       });
 
@@ -124,25 +121,88 @@ export const MapComponent: React.FC<MapComponentProps> = ({ path }) => {
         id: 'route-line',
         type: 'line',
         source: 'route',
+        layout: {
+          'line-join': 'round',
+          'line-cap': 'round'
+        },
         paint: {
           'line-color': '#3b82f6',
           'line-width': 4,
         },
       });
+
+      // Points Layer
+      map.current.addSource('points', {
+        type: 'geojson',
+        data: {
+          type: 'FeatureCollection',
+          features: []
+        },
+      });
+
+      map.current.addLayer({
+        id: 'route-points',
+        type: 'circle',
+        source: 'points',
+        paint: {
+          'circle-radius': 4,
+          'circle-color': '#3b82f6',
+          'circle-stroke-width': 1,
+          'circle-stroke-color': '#ffffff'
+        }
+      });
+
+      // Popup Logic
+      const popup = new maplibregl.Popup({
+        closeButton: false,
+        closeOnClick: false
+      });
+
+      const showPopup = (e: any) => {
+        if (!map.current) return;
+        map.current.getCanvas().style.cursor = 'pointer';
+
+        const coordinates = (e.features![0].geometry as any).coordinates.slice();
+        const props = e.features![0].properties;
+
+        while (Math.abs(e.lngLat.lng - coordinates[0]) > 180) {
+            coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
+        }
+
+        const timeStr = new Date(props.timestamp * 1000).toLocaleTimeString();
+
+        popup.setLngLat(coordinates)
+            .setHTML(`
+                <div class="text-gray-900 p-1 text-xs font-sans">
+                    <div class="font-bold border-b border-gray-300 pb-1 mb-1">${timeStr}</div>
+                    <div>Alt: <span class="font-mono font-bold">${props.alt}</span> ft</div>
+                    <div>Hdg: <span class="font-mono font-bold">${props.track}°</span></div>
+                </div>
+            `)
+            .addTo(map.current);
+      };
+
+      const hidePopup = () => {
+        if (!map.current) return;
+        map.current.getCanvas().style.cursor = '';
+        popup.remove();
+      };
+
+      map.current.on('mouseenter', 'route-points', showPopup);
+      map.current.on('mouseleave', 'route-points', hidePopup);
     });
 
     return () => {
-        // Clean up map instance on unmount? 
-        // MapLibre sometimes has issues with strict mode double-mount, but we keep it ref-guarded.
-        // map.current?.remove(); 
-        // Usually better to keep it if we can, or remove it.
+        // Cleanup handled by React refs mostly
     };
   }, []);
 
+  // Update Data Effect
   useEffect(() => {
     if (!map.current || !map.current.getSource('route')) return;
 
     const source = map.current.getSource('route') as maplibregl.GeoJSONSource;
+    const pointsSource = map.current.getSource('points') as maplibregl.GeoJSONSource;
     
     // Reset markers
     const markers = document.getElementsByClassName('maplibregl-marker');
@@ -150,66 +210,98 @@ export const MapComponent: React.FC<MapComponentProps> = ({ path }) => {
       markers[0].remove();
     }
 
-    if (path.length === 0) {
-        source.setData({
-            type: 'Feature',
-            properties: {},
-            geometry: { type: 'LineString', coordinates: [] }
-        });
+    // Determine what data to use
+    // Prefer 'points' prop, fallback to 'path' prop
+    const hasPoints = points && points.length > 0;
+    const hasPath = path && path.length > 0;
+
+    if (!hasPoints && !hasPath) {
+        source.setData({ type: 'FeatureCollection', features: [] });
+        if (pointsSource) pointsSource.setData({ type: 'FeatureCollection', features: [] });
         return;
     }
 
-    // Fit bounds immediately so we see the animation
+    const coordinates = hasPoints ? points.map(p => [p.lon, p.lat] as [number, number]) : path;
+    
+    // Fit bounds
     const bounds = new maplibregl.LngLatBounds();
-    path.forEach((coord) => bounds.extend(coord));
+    coordinates.forEach((coord) => bounds.extend(coord));
     map.current.fitBounds(bounds, { padding: 50 });
 
     // Add Start Marker
     new maplibregl.Marker({ color: "#10b981" })
-      .setLngLat(path[0])
+      .setLngLat(coordinates[0])
       .setPopup(new maplibregl.Popup().setHTML("Start"))
       .addTo(map.current);
 
-    // Animation Logic
-    let animationFrameId: number;
-    let currentIndex = 0;
-    // Target ~2 seconds for full animation
-    // 60fps * 2s = 120 frames. 
-    // Steps per frame = total_points / 120
-    const stepsPerFrame = Math.max(1, Math.ceil(path.length / 120));
+    // Add End Marker
+    new maplibregl.Marker({ color: "#ef4444" })
+        .setLngLat(coordinates[coordinates.length - 1])
+        .setPopup(new maplibregl.Popup().setHTML("End"))
+        .addTo(map.current!);
 
-    const animateLine = () => {
-        currentIndex += stepsPerFrame;
-        if (currentIndex > path.length) currentIndex = path.length;
-
-        const currentPath = path.slice(0, currentIndex);
+    if (hasPoints) {
+        // Render detailed points and line
         
+        // Line
         source.setData({
-            type: 'Feature',
-            properties: {},
-            geometry: {
-                type: 'LineString',
-                coordinates: currentPath,
-            },
+            type: 'FeatureCollection',
+            features: [{
+                type: 'Feature',
+                properties: {},
+                geometry: {
+                    type: 'LineString',
+                    coordinates: coordinates
+                }
+            }] as any
         });
 
-        if (currentIndex < path.length) {
-            animationFrameId = requestAnimationFrame(animateLine);
-        } else {
-            // Animation Complete - Add End Marker
-            new maplibregl.Marker({ color: "#ef4444" })
-                .setLngLat(path[path.length - 1])
-                .setPopup(new maplibregl.Popup().setHTML("End"))
-                .addTo(map.current!);
+        // Points
+        const pointFeatures = points.map(p => ({
+            type: 'Feature',
+            properties: {
+                timestamp: p.timestamp,
+                alt: p.alt,
+                track: p.track ?? 0,
+                color: '#3b82f6'
+            },
+            geometry: {
+                type: 'Point',
+                coordinates: [p.lon, p.lat]
+            }
+        }));
+
+        if (pointsSource) {
+            pointsSource.setData({
+                type: 'FeatureCollection',
+                features: pointFeatures as any
+            });
         }
-    };
 
-    animateLine();
+    } else {
+        // Fallback to animation style for 'path' only
+        // Actually, just render the line for simplicity as we want to unify behaviors
+        // If we really want animation we can add it back, but let's stick to the new static style for consistency with points
+        
+        source.setData({
+            type: 'FeatureCollection',
+            features: [{
+                type: 'Feature',
+                properties: {},
+                geometry: {
+                    type: 'LineString',
+                    coordinates: coordinates
+                }
+            }] as any
+        });
+        
+        // No detailed points for 'path' only
+        if (pointsSource) {
+             pointsSource.setData({ type: 'FeatureCollection', features: [] });
+        }
+    }
 
-    return () => {
-        if (animationFrameId) cancelAnimationFrame(animationFrameId);
-    };
-  }, [path]);
+  }, [path, points]);
 
   return <div ref={mapContainer} className="w-full h-full" />;
 };

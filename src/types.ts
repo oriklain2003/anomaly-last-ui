@@ -41,8 +41,24 @@ export interface AnalysisSummary {
     flight_path: [number, number][];
 }
 
+export interface TrackPoint {
+    lat: number;
+    lon: number;
+    alt: number;
+    timestamp: number;
+    track?: number;
+    gspeed?: number;
+    flight_id?: string;
+}
+
+export interface FlightTrack {
+    flight_id: string;
+    points: TrackPoint[];
+}
+
 export interface AnalysisResult {
     summary: AnalysisSummary;
+    track?: FlightTrack;
     layer_1_rules: RuleResult;
     layer_2_xgboost: ModelResult;
     layer_3_deep_dense: ModelResult;
