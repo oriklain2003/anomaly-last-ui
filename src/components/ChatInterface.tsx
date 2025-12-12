@@ -68,7 +68,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ data, flightId }) 
     try {
         const API_BASE = import.meta.env.VITE_API_URL || '';
         
-        const response = await fetch(`${API_BASE}/api/v2/chat`, {
+        const response = await fetch(`${API_BASE}/api/chat`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
