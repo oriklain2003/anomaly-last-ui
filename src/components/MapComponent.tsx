@@ -1,11 +1,17 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { Airport, TrackPoint } from '../types';
+import type { Airport, TrackPoint, AnomalyPoint } from '../types';
+
+// ML Anomaly Point for map display with layer info
+export interface MLAnomalyPoint extends AnomalyPoint {
+    layer: string;  // e.g., 'Deep Dense', 'CNN', 'Transformer', 'Hybrid'
+}
 
 interface MapComponentProps {
   path?: [number, number][];
   points?: TrackPoint[];
+  mlAnomalyPoints?: MLAnomalyPoint[];
 }
 
 // Hardcoded list of airports from rule_config.json
@@ -32,9 +38,11 @@ const AIRPORTS: Airport[] = [
     { code: "OSDI", name: "Damascus Intl", lat: 33.411, lon: 36.516 }
 ];
 
-export const MapComponent: React.FC<MapComponentProps> = ({ path = [], points = [] }) => {
+export const MapComponent: React.FC<MapComponentProps> = ({ path = [], points = [], mlAnomalyPoints = [] }) => {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
+  const mlMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const [showMLPoints, setShowMLPoints] = useState(true);
   const apiKey = 'r7kaQpfNDVZdaVp23F1r';
 
   useEffect(() => {
@@ -303,5 +311,100 @@ export const MapComponent: React.FC<MapComponentProps> = ({ path = [], points = 
 
   }, [path, points]);
 
-  return <div ref={mapContainer} className="w-full h-full" />;
+  // Effect to display ML anomaly point markers
+  useEffect(() => {
+    if (!map.current || !map.current.isStyleLoaded()) return;
+
+    // Remove existing ML markers
+    mlMarkersRef.current.forEach(marker => marker.remove());
+    mlMarkersRef.current = [];
+
+    if (!showMLPoints || mlAnomalyPoints.length === 0) return;
+
+    // Layer color mapping
+    const layerColors: Record<string, string> = {
+        'Deep Dense': '#8b5cf6',    // Purple
+        'Deep CNN': '#f97316',      // Orange
+        'Transformer': '#06b6d4',   // Cyan
+        'Hybrid': '#ec4899'         // Pink
+    };
+
+    mlAnomalyPoints.forEach((pt) => {
+        const color = layerColors[pt.layer] || '#f59e0b';
+        
+        // Create marker element
+        const el = document.createElement('div');
+        el.className = 'ml-anomaly-marker';
+        el.style.cssText = `
+            width: 16px;
+            height: 16px;
+            background: ${color};
+            border: 2px solid white;
+            border-radius: 50%;
+            box-shadow: 0 0 8px ${color}80;
+            cursor: pointer;
+        `;
+        
+        const marker = new maplibregl.Marker({ element: el })
+            .setLngLat([pt.lon, pt.lat])
+            .setPopup(new maplibregl.Popup({ offset: 15 }).setHTML(`
+                <div class="text-gray-900 p-2 text-xs font-sans">
+                    <div class="font-bold border-b border-gray-300 pb-1 mb-1" style="color: ${color}">
+                        ${pt.layer} Anomaly
+                    </div>
+                    <div>Time: <span class="font-mono">${new Date(pt.timestamp * 1000).toLocaleTimeString()}</span></div>
+                    <div>Score: <span class="font-mono font-bold">${pt.point_score.toFixed(4)}</span></div>
+                    <div class="text-gray-500 mt-1">${pt.lat.toFixed(4)}, ${pt.lon.toFixed(4)}</div>
+                </div>
+            `))
+            .addTo(map.current!);
+        
+        mlMarkersRef.current.push(marker);
+    });
+  }, [mlAnomalyPoints, showMLPoints]);
+
+  return (
+    <div className="relative w-full h-full">
+      <div ref={mapContainer} className="w-full h-full" />
+      
+      {/* ML Points Toggle */}
+      {mlAnomalyPoints.length > 0 && (
+        <button
+          onClick={() => setShowMLPoints(!showMLPoints)}
+          className={`absolute top-4 right-4 z-10 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+            showMLPoints 
+              ? 'bg-pink-600 text-white shadow-lg' 
+              : 'bg-gray-800/80 text-gray-300 hover:bg-gray-700'
+          }`}
+        >
+          {showMLPoints ? "Hide ML Points" : "Show ML Points"}
+        </button>
+      )}
+      
+      {/* Legend */}
+      {mlAnomalyPoints.length > 0 && showMLPoints && (
+        <div className="absolute bottom-4 left-4 z-10 bg-black/70 backdrop-blur-sm p-3 rounded-lg text-white text-xs">
+          <p className="font-bold mb-2">ML Anomaly Points</p>
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-2">
+              <span className="h-3 w-3 rounded-full bg-purple-500"></span>
+              <span>Deep Dense</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="h-3 w-3 rounded-full bg-orange-500"></span>
+              <span>Deep CNN</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="h-3 w-3 rounded-full bg-cyan-500"></span>
+              <span>Transformer</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="h-3 w-3 rounded-full bg-pink-500"></span>
+              <span>Hybrid</span>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 };

@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
-import type { AnalysisResult, RuleResult, RuleDefinition } from '../types';
-import { MapComponent } from './MapComponent';
-import { AlertTriangle, CheckCircle, Hourglass, ChevronDown } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import type { AnalysisResult, RuleResult, RuleDefinition, AnomalyPoint } from '../types';
+import { MapComponent, type MLAnomalyPoint } from './MapComponent';
+import { AlertTriangle, CheckCircle, Hourglass, ChevronDown, MapPin } from 'lucide-react';
 import clsx from 'clsx';
 
 interface ResultsViewProps {
@@ -13,6 +13,37 @@ interface ResultsViewProps {
 
 export const ResultsView: React.FC<ResultsViewProps> = ({ data, flightId, isLoading, error }) => {
   const isAnomaly = data?.summary.is_anomaly;
+  
+  // Extract ML anomaly points for map visualization
+  const mlAnomalyPoints = useMemo((): MLAnomalyPoint[] => {
+    if (!data) return [];
+
+    const points: MLAnomalyPoint[] = [];
+
+    const layerMap: Record<string, string> = {
+        'layer_3_deep_dense': 'Deep Dense',
+        'layer_4_deep_cnn': 'Deep CNN',
+        'layer_5_transformer': 'Transformer',
+        'layer_6_hybrid': 'Hybrid'
+    };
+
+    Object.entries(layerMap).forEach(([key, layerName]) => {
+        const layerData = (data as any)[key];
+        if (layerData?.anomaly_points && layerData.is_anomaly) {
+            layerData.anomaly_points.forEach((pt: AnomalyPoint) => {
+                points.push({
+                    lat: pt.lat,
+                    lon: pt.lon,
+                    timestamp: pt.timestamp,
+                    point_score: pt.point_score,
+                    layer: layerName
+                });
+            });
+        }
+    });
+
+    return points;
+  }, [data]);
 
   // Always render the map, use empty path if no data
   return (
@@ -86,6 +117,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({ data, flightId, isLoad
         <MapComponent 
           path={data?.summary.flight_path || []} 
           points={data?.track?.points}
+          mlAnomalyPoints={mlAnomalyPoints}
         />
         <div className="absolute top-4 left-4 bg-black/70 backdrop-blur-sm text-white px-3 py-1.5 rounded-lg text-sm z-10 pointer-events-none">
           <p className="font-bold">Flight Path Visualization</p>
@@ -115,6 +147,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({ data, flightId, isLoad
                   label="Anomaly Score"
                   barLabel="Probability"
                   delay="400ms"
+                  anomalyPoints={data?.layer_2_xgboost?.anomaly_points}
                 />
 
                 {/* Deep Dense */}
@@ -128,6 +161,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({ data, flightId, isLoad
                   suffix="x"
                   scale={10} // Scale score * 10 for percentage if needed
                   delay="500ms"
+                  anomalyPoints={data?.layer_3_deep_dense?.anomaly_points}
                 />
 
                 {/* Deep CNN */}
@@ -141,6 +175,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({ data, flightId, isLoad
                   suffix="x"
                   scale={10}
                   delay="600ms"
+                  anomalyPoints={data?.layer_4_deep_cnn?.anomaly_points}
                 />
 
                 {/* Transformer */}
@@ -152,6 +187,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({ data, flightId, isLoad
                   label="Anomaly Score"
                   barLabel="Probability"
                   delay="700ms"
+                  anomalyPoints={data?.layer_5_transformer?.anomaly_points}
                 />
 
                 {/* Hybrid */}
@@ -163,6 +199,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({ data, flightId, isLoad
                   label="Anomaly Score"
                   barLabel="Probability"
                   delay="800ms"
+                  anomalyPoints={data?.layer_6_hybrid?.anomaly_points}
                 />
             </div>
         </div>
@@ -332,6 +369,15 @@ const RuleItem: React.FC<{ rule: RuleDefinition }> = ({ rule }) => {
     )
 }
 
+// Layer color mapping for ML models
+const LAYER_COLORS: Record<string, { bg: string; border: string; text: string; accent: string }> = {
+    'Deep Dense AE': { bg: 'bg-purple-500/15', border: 'border-purple-400', text: 'text-purple-400', accent: 'bg-purple-500/30' },
+    'Deep CNN': { bg: 'bg-orange-500/15', border: 'border-orange-400', text: 'text-orange-400', accent: 'bg-orange-500/30' },
+    'Transformer': { bg: 'bg-cyan-500/15', border: 'border-cyan-400', text: 'text-cyan-400', accent: 'bg-cyan-500/30' },
+    'Hybrid CNN-Trans': { bg: 'bg-pink-500/15', border: 'border-pink-400', text: 'text-pink-400', accent: 'bg-pink-500/30' },
+    'XGBoost Model': { bg: 'bg-blue-500/15', border: 'border-blue-400', text: 'text-blue-400', accent: 'bg-blue-500/30' },
+};
+
 interface ModelCardProps {
   title: string;
   status?: string;
@@ -342,10 +388,13 @@ interface ModelCardProps {
   suffix?: string;
   scale?: number;
   delay?: string;
+  anomalyPoints?: AnomalyPoint[];
 }
 
-const ModelCard: React.FC<ModelCardProps> = ({ title, status, score, isAnomaly, label, barLabel, suffix = "", scale = 100, delay }) => {
+const ModelCard: React.FC<ModelCardProps> = ({ title, status, score, isAnomaly, label, barLabel, suffix = "", scale = 100, delay, anomalyPoints = [] }) => {
   const percentage = Math.min((score || 0) * scale, 100);
+  const [showPoints, setShowPoints] = useState(false);
+  const layerColor = LAYER_COLORS[title] || { bg: 'bg-gray-500/15', border: 'border-gray-400', text: 'text-gray-400', accent: 'bg-gray-500/30' };
   
   return (
     <div 
@@ -370,6 +419,71 @@ const ModelCard: React.FC<ModelCardProps> = ({ title, status, score, isAnomaly, 
             style={{ width: `${percentage}%` }}
           ></div>
         </div>
+      </div>
+      
+      {/* Anomaly Points Section */}
+      <div className="mt-2 pt-3 border-t border-gray-200/50 dark:border-white/10">
+        <button 
+          onClick={() => setShowPoints(!showPoints)}
+          className="flex items-center justify-between w-full text-left"
+        >
+          <div className="flex items-center gap-2">
+            <MapPin className={clsx("h-4 w-4", isAnomaly ? layerColor.text : "text-gray-400")} />
+            <span className={clsx("text-sm font-medium", isAnomaly ? layerColor.text : "text-gray-400")}>
+              Detected Anomaly Locations
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            {anomalyPoints.length > 0 && (
+              <span className={clsx("text-xs px-2 py-0.5 rounded font-bold", layerColor.accent, layerColor.text)}>
+                {anomalyPoints.length} points
+              </span>
+            )}
+            <ChevronDown className={clsx("h-4 w-4 text-gray-400 transition-transform", showPoints && "rotate-180")} />
+          </div>
+        </button>
+        
+        {showPoints && (
+          <div className="mt-3 space-y-2 animate-in slide-in-from-top-2 duration-200">
+            {anomalyPoints.length > 0 ? (
+              <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
+                {anomalyPoints.map((pt, idx) => (
+                  <div 
+                    key={idx} 
+                    className={clsx("p-3 rounded-lg border-l-2 text-xs", layerColor.bg, layerColor.border)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className={clsx("w-5 h-5 rounded-full flex items-center justify-center font-bold text-[10px]", layerColor.accent, layerColor.text)}>
+                          {idx + 1}
+                        </span>
+                        <span className="font-mono text-gray-700 dark:text-gray-200">
+                          {new Date(pt.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="text-gray-500">Score:</span>
+                        <span className={clsx("font-mono font-bold", layerColor.text)}>{pt.point_score.toFixed(4)}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between mt-1.5 pl-7">
+                      <span className="text-gray-500 font-mono text-[10px]">
+                        {pt.lat.toFixed(4)}°, {pt.lon.toFixed(4)}°
+                      </span>
+                      <span className="text-gray-400 text-[10px]">
+                        reconstruction error
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-xs text-gray-400 italic text-center py-3 bg-gray-100 dark:bg-white/5 rounded">
+                {isAnomaly ? "No specific points identified" : "No anomalies detected"}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

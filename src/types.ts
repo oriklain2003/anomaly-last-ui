@@ -25,11 +25,20 @@ export interface RuleResult {
     report?: RuleReport; // Full detailed report
 }
 
+// ML Model anomaly point location
+export interface AnomalyPoint {
+    lat: number;
+    lon: number;
+    timestamp: number;
+    point_score: number;
+}
+
 export interface ModelResult {
     status: string;
     score?: number;
     severity?: number;
     is_anomaly: boolean;
+    anomaly_points?: AnomalyPoint[];
 }
 
 export interface AnalysisSummary {
