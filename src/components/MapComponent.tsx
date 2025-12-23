@@ -8,6 +8,62 @@ export interface MLAnomalyPoint extends AnomalyPoint {
     layer: string;  // e.g., 'Deep Dense', 'CNN', 'Transformer', 'Hybrid'
 }
 
+// ============================================================
+// Learned Layers Types (SID, STAR, Turns, Paths)
+// ============================================================
+
+interface LearnedPathPoint {
+    lat: number;
+    lon: number;
+    alt: number;
+}
+
+interface LearnedPath {
+    id: string;
+    origin: string | null;
+    destination: string | null;
+    centerline: LearnedPathPoint[];
+    width_nm?: number;
+    member_count: number;
+}
+
+interface LearnedTurnZone {
+    id: number;
+    lat: number;
+    lon: number;
+    radius_nm: number;
+    avg_alt_ft: number;
+    angle_range_deg: [number, number];
+    avg_speed_kts: number;
+    member_count: number;
+    directions: { left: number; right: number };
+}
+
+interface LearnedProcedure {
+    id: string;
+    airport: string;
+    type: 'SID' | 'STAR';
+    centerline: LearnedPathPoint[];
+    width_nm?: number;
+    member_count: number;
+}
+
+interface LearnedLayers {
+    paths: LearnedPath[];
+    turns: LearnedTurnZone[];
+    sids: LearnedProcedure[];
+    stars: LearnedProcedure[];
+}
+
+const fetchLearnedLayers = async (): Promise<LearnedLayers> => {
+    const API_BASE = (import.meta.env.VITE_API_URL || '') + '/api';
+    const response = await fetch(`${API_BASE}/learned-layers`);
+    if (!response.ok) {
+        throw new Error('Failed to fetch learned layers');
+    }
+    return response.json();
+};
+
 interface MapComponentProps {
   path?: [number, number][];
   points?: TrackPoint[];
@@ -44,6 +100,28 @@ export const MapComponent: React.FC<MapComponentProps> = ({ path = [], points = 
   const mlMarkersRef = useRef<maplibregl.Marker[]>([]);
   const [showMLPoints, setShowMLPoints] = useState(true);
   const apiKey = 'r7kaQpfNDVZdaVp23F1r';
+
+  // Learned Layers state
+  const [learnedLayers, setLearnedLayers] = useState<LearnedLayers | null>(null);
+  const [showPaths, setShowPaths] = useState(false);
+  const [showTurns, setShowTurns] = useState(false);
+  const [showSids, setShowSids] = useState(false);
+  const [showStars, setShowStars] = useState(false);
+
+  // Fetch learned layers on mount
+  useEffect(() => {
+    fetchLearnedLayers()
+        .then(data => {
+            setLearnedLayers(data);
+            console.log("[MapComponent] Loaded learned layers:", {
+                paths: data.paths?.length || 0,
+                turns: data.turns?.length || 0,
+                sids: data.sids?.length || 0,
+                stars: data.stars?.length || 0
+            });
+        })
+        .catch(err => console.error("[MapComponent] Failed to load learned layers", err));
+  }, []);
 
   useEffect(() => {
     if (map.current || !mapContainer.current) return;
@@ -363,23 +441,238 @@ export const MapComponent: React.FC<MapComponentProps> = ({ path = [], points = 
     });
   }, [mlAnomalyPoints, showMLPoints]);
 
+  // Learned Layers Visualization (Paths, Turns, SIDs, STARs)
+  useEffect(() => {
+    if (!map.current) return;
+
+    // Helper to add a source and layer safely
+    const addLayerSafe = (id: string, color: string, dashArray: number[], type: 'line' | 'fill' = 'line') => {
+        if (!map.current!.getSource(id)) {
+            try {
+                map.current!.addSource(id, {
+                    type: 'geojson',
+                    data: { type: 'FeatureCollection', features: [] }
+                });
+                
+                const beforeId = map.current!.getLayer('route-line') ? 'route-line' : undefined;
+
+                const paint: any = type === 'line' ? {
+                    'line-color': color,
+                    'line-width': 2,
+                    'line-opacity': 0.7,
+                } : {
+                    'fill-color': color,
+                    'fill-opacity': 0.2,
+                    'fill-outline-color': color
+                };
+
+                if (type === 'line' && dashArray && dashArray.length > 0) {
+                    paint['line-dasharray'] = dashArray;
+                }
+
+                map.current!.addLayer({
+                    id: `${id}-layer`,
+                    type: type,
+                    source: id,
+                    layout: { 'visibility': 'visible' },
+                    paint: paint
+                } as any, beforeId);
+            } catch (e) {
+                // Layer already exists or other error - ignore
+            }
+        } 
+    };
+
+    // Create all layer sources
+    addLayerSafe('learned-paths', '#4CAF50', [], 'line');           // Green solid for paths
+    addLayerSafe('learned-turns', '#FF9800', [], 'fill');           // Orange fill for turns
+    addLayerSafe('learned-sids', '#2196F3', [5, 5], 'line');        // Blue dashed for SIDs
+    addLayerSafe('learned-stars', '#E91E63', [5, 5], 'line');       // Pink dashed for STARs
+
+    // Helper to create circle polygon from center and radius
+    const createCirclePolygon = (lat: number, lon: number, radiusNm: number) => {
+        const radiusKm = radiusNm * 1.852;
+        const numPoints = 32;
+        const coords: [number, number][] = [];
+        const distanceX = radiusKm / (111.320 * Math.cos(lat * Math.PI / 180));
+        const distanceY = radiusKm / 110.574;
+
+        for (let i = 0; i < numPoints; i++) {
+            const theta = (i / numPoints) * (2 * Math.PI);
+            const x = distanceX * Math.cos(theta);
+            const y = distanceY * Math.sin(theta);
+            coords.push([lon + x, lat + y]);
+        }
+        coords.push(coords[0]); // Close the polygon
+        return coords;
+    };
+
+    // Update paths source
+    const updatePaths = () => {
+        const source = map.current!.getSource('learned-paths') as maplibregl.GeoJSONSource;
+        if (!source) return;
+
+        if (showPaths && learnedLayers?.paths && learnedLayers.paths.length > 0) {
+            const features = learnedLayers.paths
+                .filter(path => path.centerline && path.centerline.length >= 2)
+                .map(path => ({
+                    type: 'Feature' as const,
+                    properties: { 
+                        id: path.id,
+                        origin: path.origin,
+                        destination: path.destination,
+                        member_count: path.member_count
+                    },
+                    geometry: {
+                        type: 'LineString' as const,
+                        coordinates: path.centerline.map(p => [p.lon, p.lat])
+                    }
+                }));
+            source.setData({ type: 'FeatureCollection', features });
+        } else {
+            source.setData({ type: 'FeatureCollection', features: [] });
+        }
+    };
+
+    // Update turns source
+    const updateTurns = () => {
+        const source = map.current!.getSource('learned-turns') as maplibregl.GeoJSONSource;
+        if (!source) return;
+
+        if (showTurns && learnedLayers?.turns && learnedLayers.turns.length > 0) {
+            const features = learnedLayers.turns.map(turn => ({
+                type: 'Feature' as const,
+                properties: { 
+                    id: turn.id,
+                    avg_alt_ft: turn.avg_alt_ft,
+                    radius_nm: turn.radius_nm,
+                    member_count: turn.member_count
+                },
+                geometry: {
+                    type: 'Polygon' as const,
+                    coordinates: [createCirclePolygon(turn.lat, turn.lon, turn.radius_nm)]
+                }
+            }));
+            source.setData({ type: 'FeatureCollection', features });
+        } else {
+            source.setData({ type: 'FeatureCollection', features: [] });
+        }
+    };
+
+    // Update SIDs source
+    const updateSids = () => {
+        const source = map.current!.getSource('learned-sids') as maplibregl.GeoJSONSource;
+        if (!source) return;
+
+        if (showSids && learnedLayers?.sids && learnedLayers.sids.length > 0) {
+            const features = learnedLayers.sids
+                .filter(proc => proc.centerline && proc.centerline.length >= 2)
+                .map(proc => ({
+                    type: 'Feature' as const,
+                    properties: { 
+                        id: proc.id,
+                        airport: proc.airport,
+                        type: proc.type,
+                        member_count: proc.member_count
+                    },
+                    geometry: {
+                        type: 'LineString' as const,
+                        coordinates: proc.centerline.map(p => [p.lon, p.lat])
+                    }
+                }));
+            source.setData({ type: 'FeatureCollection', features });
+        } else {
+            source.setData({ type: 'FeatureCollection', features: [] });
+        }
+    };
+
+    // Update STARs source
+    const updateStars = () => {
+        const source = map.current!.getSource('learned-stars') as maplibregl.GeoJSONSource;
+        if (!source) return;
+
+        if (showStars && learnedLayers?.stars && learnedLayers.stars.length > 0) {
+            const features = learnedLayers.stars
+                .filter(proc => proc.centerline && proc.centerline.length >= 2)
+                .map(proc => ({
+                    type: 'Feature' as const,
+                    properties: { 
+                        id: proc.id,
+                        airport: proc.airport,
+                        type: proc.type,
+                        member_count: proc.member_count
+                    },
+                    geometry: {
+                        type: 'LineString' as const,
+                        coordinates: proc.centerline.map(p => [p.lon, p.lat])
+                    }
+                }));
+            source.setData({ type: 'FeatureCollection', features });
+        } else {
+            source.setData({ type: 'FeatureCollection', features: [] });
+        }
+    };
+
+    // Update all sources
+    updatePaths();
+    updateTurns();
+    updateSids();
+    updateStars();
+  }, [showPaths, showTurns, showSids, showStars, learnedLayers]);
+
   return (
     <div className="relative w-full h-full">
       <div ref={mapContainer} className="w-full h-full" />
       
-      {/* ML Points Toggle */}
-      {mlAnomalyPoints.length > 0 && (
-        <button
-          onClick={() => setShowMLPoints(!showMLPoints)}
-          className={`absolute top-4 right-4 z-10 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-            showMLPoints 
-              ? 'bg-pink-600 text-white shadow-lg' 
-              : 'bg-gray-800/80 text-gray-300 hover:bg-gray-700'
-          }`}
+      {/* Layer Toggle Buttons */}
+      <div className="absolute top-4 right-4 z-10 flex flex-col gap-2">
+        <button 
+            onClick={() => setShowPaths(!showPaths)}
+            className={`px-3 py-2 rounded shadow text-xs font-medium opacity-90 transition-colors ${
+                showPaths ? 'bg-green-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+            }`}
+            title={`${learnedLayers?.paths?.length || 0} flight paths`}
         >
-          {showMLPoints ? "Hide ML Points" : "Show ML Points"}
+            {showPaths ? "Hide Paths" : "Show Paths"}
         </button>
-      )}
+        <button 
+            onClick={() => setShowTurns(!showTurns)}
+            className={`px-3 py-2 rounded shadow text-xs font-medium opacity-90 transition-colors ${
+                showTurns ? 'bg-orange-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+            }`}
+            title={`${learnedLayers?.turns?.length || 0} turn zones`}
+        >
+            {showTurns ? "Hide Turns" : "Show Turns"}
+        </button>
+        <button 
+            onClick={() => setShowSids(!showSids)}
+            className={`px-3 py-2 rounded shadow text-xs font-medium opacity-90 transition-colors ${
+                showSids ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+            }`}
+            title={`${learnedLayers?.sids?.length || 0} SID procedures`}
+        >
+            {showSids ? "Hide SIDs" : "Show SIDs"}
+        </button>
+        <button 
+            onClick={() => setShowStars(!showStars)}
+            className={`px-3 py-2 rounded shadow text-xs font-medium opacity-90 transition-colors ${
+                showStars ? 'bg-pink-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+            }`}
+            title={`${learnedLayers?.stars?.length || 0} STAR procedures`}
+        >
+            {showStars ? "Hide STARs" : "Show STARs"}
+        </button>
+        {mlAnomalyPoints.length > 0 && (
+            <button 
+                onClick={() => setShowMLPoints(!showMLPoints)}
+                className={`px-3 py-2 rounded shadow text-xs font-medium opacity-90 transition-colors ${
+                    showMLPoints ? 'bg-purple-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                }`}
+            >
+                {showMLPoints ? "Hide ML Points" : "Show ML Points"}
+            </button>
+        )}
+      </div>
       
       {/* Legend */}
       {mlAnomalyPoints.length > 0 && showMLPoints && (
